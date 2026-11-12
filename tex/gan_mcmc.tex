@@ -1,0 +1,241 @@
+\pdfoutput=1
+\documentclass[11pt]{article}
+\usepackage{smile}
+\usepackage{subcaption}
+\usepackage{pdflscape}   
+\usepackage{pifont}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, calc, shapes.geometric}
+% ===== Morandi palette =====
+\definecolor{morandiGreen}{RGB}{140,160,140}
+\definecolor{morandiPink}{RGB}{244,186,180}  
+\definecolor{morandiBlue}{RGB}{190,210,250}  
+\definecolor{morandiOrange}{RGB}{200,160,120}
+\definecolor{morandiPurple}{RGB}{150,140,160}
+\definecolor{morandiGray}{RGB}{160,160,160}
+\usepackage[margin=1in]{geometry}
+\usepackage[most]{tcolorbox}
+\renewcommand{\baselinestretch}{1.10}
+%%%%%%%%%%%%-- Comments --%%%%%%%%%%%%
+%%%%%%%%%%%%-- new command --%%%%%%%%%%%%
+\newcommand{\bbP}{\mathbb{P}}
+\newcommand{\bbR}{\mathbb{R}}
+\newcommand{\bbE}{\mathbb{E}}
+\newcommand{\bbN}{\mathbb{N}}
+\newcommand{\wh}{\widehat}
+\newcommand{\wt}{\widetilde}
+\newcommand{\ol}{\overline}
+%%%%%%%%%%%%-- start --%%%%%%%%%%%%%%%
+\title{\bf GAN and Markov Chain Monte Carlo}
+%\author{Junyi Liao$^\dagger$
+%\\ 
+%$^{\dagger}$\small\it Department of Electrical and Computer Engineering, Duke University
+%}
+% \author{Junyi Liao$^1$,\ \ 
+% Xiaohui Jiang$^2$
+% \\ 
+% ~\\
+% $^{1}$\small\it Department of Electrical and Computer Engineering, Duke University \\ 
+% $^{2}$\small\it Department of Biostatistics and Bioinformatics, Duke University \\ 
+% \small\sf \{junyi.liao, x.jiang\}@duke.edu
+% }
+\date{}
+\begin{document}
+\maketitle
+
+%\begin{abstract}
+%\end{abstract}
+
+%\tableofcontents
+
+\section{Motivation and Problem Statement}
+Let $\pi$ be a target probability distribution on a state space $\mathsf X$. Our main setting assumes that we can obtain i.i.d. training samples from $\pi$ but cannot evaluate its density. We seek an efficient, reusable Markov sampler that can generate new samples from arbitrary initial states. In a secondary setting, the target may be specified through an unnormalized energy $\pi(x)\propto\exp\{-U(x)\}$.
+
+A classical GAN learns a static mapping $G_\theta(Z)$ whose marginal distribution approximates $\pi$. By contrast, we consider a \emph{state-dependent} generator
+\begin{equation}
+Y_t=G_\theta(X_t,Z_t),\qquad Z_t\sim p_Z,
+\label{eq:proposal}
+\end{equation}
+which induces a possibly implicit proposal kernel $q_\theta(dy\mid x)$. A separate neural function $a_\psi(x,y)\in[0,1]$ determines whether the proposal is accepted:
+\begin{equation}
+X_{t+1}=\begin{cases}
+Y_t, & U_t\le a_\psi(X_t,Y_t),\\
+X_t, & \text{otherwise},
+\end{cases}\qquad U_t\sim\operatorname{Unif}(0,1).
+\label{eq:chain}
+\end{equation}
+Unlike a standard GAN discriminator, $a_\psi$ assesses a \emph{transition} $(x,y)$, not just an isolated sample. The proposal and acceptance mechanisms are naturally cooperative: they should produce a chain that both preserves $\pi$ and explores it rapidly. An adversarial critic can be used to identify failures of these objectives.
+
+\paragraph{Goal.} Develop a sample-based minimax formulation that jointly learns $(q_\theta,a_\psi)$ and controls (i) the target-distribution error, (ii) violations of stationarity or detailed balance, and (iii) sampling inefficiency such as autocorrelation or mode trapping.
+
+\section{Relevant Prior Work}
+\paragraph{MH-GAN: independent proposals and discriminator correction.}
+\cite{turner2019metropolis} treat a pre-trained GAN generator $p_\theta$ as an \emph{independent} proposal. For a fixed generator, the Bayes-optimal GAN discriminator satisfies
+\begin{equation}
+D^*(x)=\frac{\pi(x)}{\pi(x)+p_\theta(x)},
+\qquad
+\frac{\pi(x)}{p_\theta(x)}=\frac{D^*(x)}{1-D^*(x)}.
+\end{equation}
+Hence the independent MH acceptance rule can be written without evaluating either density:
+\begin{equation}
+a_{\mathrm{MH}}(x,y)
+=\min\left\{1,\frac{D^*(y)/[1-D^*(y)]}{D^*(x)/[1-D^*(x)]}\right\}.
+\label{eq:mhgan}
+\end{equation}
+This is an MH \emph{wrapper} around a generator, rather than a jointly trained Markovian proposal and acceptance rule. Exactness requires the correct density ratio (and appropriate support and convergence assumptions). The paper also stresses discriminator calibration, which matters because a good classification ranking need not produce an accurate MH ratio.
+
+\paragraph{Implicit MH: state-dependent implicit proposals.}
+\cite{neklyudov2019implicit} generalize the idea to a proposal $q_\theta(y\mid x)$ that need not have a tractable density. Introduce the forward and reverse joint proposal measures (written as densities here for convenience):
+\begin{equation}
+F_\theta(x,y)=\pi(x)q_\theta(y\mid x),
+\qquad
+B_\theta(x,y)=\pi(y)q_\theta(x\mid y)=F_\theta(y,x).
+\label{eq:flows}
+\end{equation}
+A pairwise discriminator that classifies samples from $F_\theta$ versus $B_\theta$ has optimum
+\begin{equation}
+D^*_{\theta}(x,y)=\frac{F_\theta(x,y)}{F_\theta(x,y)+B_\theta(x,y)},
+\end{equation}
+so the desired acceptance ratio becomes
+\begin{equation}
+a_{\mathrm{MH}}(x,y)=\min\left\{1,\frac{B_\theta(x,y)}{F_\theta(x,y)}\right\}
+=\min\left\{1,\frac{1-D^*_{\theta}(x,y)}{D^*_{\theta}(x,y)}\right\}.
+\label{eq:implicit-mh}
+\end{equation}
+Crucially, one can sample a forward pair $(X,Y)$ by taking $X\sim\pi$ and $Y\sim q_\theta(\cdot\mid X)$; the reversed pair $(Y,X)$ follows $B_\theta$. Thus neither density needs to be evaluated. The paper analyzes the stationary-distribution error caused by an imperfect discriminator, under explicit mixing/minorization conditions, and considers both independent and Markov proposals. 
+
+\paragraph{Adversarially learned Markov kernels.}
+\cite{song2017generative} learn a Markov transition through adversarial comparisons with data, including short chains initialized from target samples. Their subsequent A-NICE-MC approach \cite{song2017nice} learns neural MCMC proposals and uses an analytically specified MH correction for energy-based targets. \cite{neklyudov2018metropolis} also connect GANs, variational inference, and MH acceptance objectives. Together, these works already cover adversarial Markov generators, learned proposals, and discriminator-based MH corrections. A joint proposal--acceptance game must be distinguished from these precedents through its specific objective or guarantees.
+
+\section{Proposed Proposal--Acceptance--Critic Framework}
+\subsection{Neural transition kernel}
+Given \eqref{eq:proposal}--\eqref{eq:chain}, the resulting Markov kernel is
+\begin{equation}
+K_{\theta,\psi}(x,dy)=q_\theta(dy\mid x)a_\psi(x,y)
++\left[1-\int q_\theta(dz\mid x)a_\psi(x,z)\right]\delta_x(dy).
+\label{eq:kernel}
+\end{equation}
+We propose three interacting components: (i) $G_\theta$ generates state-dependent candidate moves, (ii) $a_\psi$ learns a pair-dependent accept/reject probability, and (iii) a multi-head critic evaluates distributional mismatch, accepted-flow asymmetry, and slow mixing. Only the \emph{critic} is adversarial to the sampler; proposal and acceptance jointly minimize the sampler's objective.
+
+\subsection{Matching the target after a finite number of steps}
+Let $\nu_0$ be an initialization distribution and $\mu_{\theta,\psi}^{(T)}=\nu_0K_{\theta,\psi}^{T}$. An adversarial integral probability metric is
+\begin{equation}
+\mathcal L_{\mathrm{gen}}(\theta,\psi)=\sup_{f\in\mathcal F}
+\left\{\bbE_{X\sim\pi}f(X)-\bbE_{X\sim\mu_{\theta,\psi}^{(T)}}f(X)\right\}.
+\label{eq:gen}
+\end{equation}
+For instance, $\mathcal F$ may be a bounded-Lipschitz class; with $1$-Lipschitz critics and finite first moments, the objective is Wasserstein-1. A bounded class is especially relevant when targeting heavy-tailed distributions that may lack a finite first moment. Matching a single finite-time marginal is not, by itself, a stationarity guarantee.
+
+\subsection{Adversarial detailed-balance constraint}
+Define the \emph{accepted flow}
+\begin{equation}
+J_{\theta,\psi}(dx,dy)=\pi(dx)q_\theta(dy\mid x)a_\psi(x,y).
+\label{eq:accepted-flow}
+\end{equation}
+Detailed balance is exactly the symmetry condition $J_{\theta,\psi}(dx,dy)=J_{\theta,\psi}(dy,dx)$. We therefore propose the sample-estimable discrepancy
+\begin{align}
+\mathcal L_{\mathrm{bal}}(\theta,\psi)
+&=\sup_{h\in\mathcal H}\int\!\big[h(x,y)-h(y,x)\big]J_{\theta,\psi}(dx,dy)\notag\\
+&=\sup_{h\in\mathcal H}\bbE_{X\sim\pi,\,Y\sim q_\theta(\cdot\mid X)}
+\Big[a_\psi(X,Y)\{h(X,Y)-h(Y,X)\}\Big].
+\label{eq:balance}
+\end{align}
+Here $\mathcal H$ should be symmetric under sign reversal and suitably bounded. With all bounded measurable test functions, zero discrepancy is equivalent to detailed balance; with a neural critic, only the restricted discrepancy is controlled. The loss requires neither $\pi(x)$ nor $q_\theta(y\mid x)$.
+
+\paragraph{A degeneracy.} The identically rejecting rule $a_\psi\equiv0$ gives $\mathcal L_{\mathrm{bal}}=0$, yet the chain never moves. We must therefore explicitly reward exploration, rather than use detailed balance as the sole learning criterion.
+
+\subsection{An adversarial mixing-efficiency objective}
+When $K_{\theta,\psi}$ is $\pi$-reversible, its Poincar\'e (right) spectral gap admits the Dirichlet-form representation
+\begin{align}
+\operatorname{Gap}(K_{\theta,\psi})
+&=\inf_{\substack{\bbE_\pi g=0\\\operatorname{Var}_\pi(g)=1}}
+\mathcal E_{K_{\theta,\psi}}(g,g),\\
+\mathcal E_{K_{\theta,\psi}}(g,g)
+&=\frac12 \bbE_{X\sim\pi,\,Y\sim K_{\theta,\psi}(\cdot\mid X)}
+\big[(g(Y)-g(X))^2\big]\\
+&=\frac12 \bbE_{X\sim\pi,\,Y\sim q_\theta(\cdot\mid X)}
+\Big[a_\psi(X,Y)(g(Y)-g(X))^2\Big].
+\label{eq:dirichlet}
+\end{align}
+The last expression avoids simulating the discrete accept/reject decision and is differentiable in the acceptance score (and in a reparameterizable proposal). We can approximate the infimum with normalized neural test functions $g\in\mathcal G$. The sampler tries to \emph{maximize} the worst-case Dirichlet energy, while the critic seeks slowly evolving observables. For reliable convergence bounds one may additionally impose a lazy kernel or another condition controlling negative eigenvalues. When detailed balance holds only approximately, this should be treated as a mixing surrogate rather than an exact spectral gap.
+
+\subsection{A candidate minimax objective}
+A unified, \emph{provisional} two-player game is
+\begin{align}
+\min_{\theta,\psi}\max_{\substack{f\in\mathcal F,\ h\in\mathcal H,\\
+                                     g\in\mathcal G:\ \bbE_\pi g=0,\ \operatorname{Var}_\pi(g)=1}}
+\quad &\underbrace{\bbE_\pi f-\bbE_{\nu_0K_{\theta,\psi}^{T}}f}_{\text{finite-time distribution match}}
++\lambda_{\mathrm{bal}}
+\underbrace{\bbE_{\pi q_\theta}\!\left[a_\psi(X,Y)(h(X,Y)-h(Y,X))\right]}_{\text{accepted-flow balance}}
+\notag\\[-0.2em]
+&-\lambda_{\mathrm{mix}}
+\underbrace{\frac12\bbE_{\pi q_\theta}\!\left[a_\psi(X,Y)(g(Y)-g(X))^2\right]}_{\text{worst-case mixing surrogate}}.
+\label{eq:game}
+\end{align}
+The critic may be implemented as a neural network with three heads $(f,h,g)$, or as separate networks. $\lambda_{\mathrm{bal}},\lambda_{\mathrm{mix}}>0$ express competing priorities. Because a finite penalty does not enforce exact balance, a complementary formulation is to maximize the mixing criterion \emph{subject to} a prescribed bound $\mathcal L_{\mathrm{bal}}\le\varepsilon$, and then study the effect of $\varepsilon$ on stationary-distribution error. The objective in \eqref{eq:game} is a research hypothesis, not an established optimization guarantee.
+
+\subsection{Acceptance-network design and possible training strategy}
+We propose comparing two variants:
+\begin{enumerate}
+\item \textbf{Density-ratio-informed acceptance:} learn a pairwise classifier $D_\eta$ from forward/reversed proposals and set $a(x,y)=\min\{1,(1-D_\eta(x,y))/D_\eta(x,y)\}$, optionally with calibration and balance/mixing regularization. This is closely related to implicit MH, but one can investigate \emph{joint} rather than sequential training of the proposal.
+\item \textbf{Directly learned acceptance:} parameterize $a_\psi(x,y)=\sigma(s_\psi(x,y))$ and train it through \eqref{eq:game}, with explicit reversibility constraints or penalties. This gives a more flexible objective, but exact stationarity is no longer automatic.
+\end{enumerate}
+A practical first stage can train the acceptance classifier using real starting states and forward/reversed pairs. A second stage can update proposals and acceptance jointly using \eqref{eq:balance} and \eqref{eq:dirichlet}, adding short-chain endpoint matching once stable gradients are available. Differentiating through discrete multi-step accept/reject decisions remains a technical challenge (e.g., score-function estimators or carefully analyzed relaxations).
+
+\section{What Guarantees Are Plausible?}
+\paragraph{Exact balance implies stationarity.}
+If the accepted-flow symmetry in \eqref{eq:accepted-flow} holds exactly, then $\pi K_{\theta,\psi}=\pi$, independently of whether the proposal density is evaluable. Ergodicity and convergence from arbitrary initial states require additional irreducibility/recurrence and aperiodicity or related assumptions.
+
+\paragraph{Approximate balance and stationary error.}
+Suppose the learned kernel has a unique invariant distribution $\pi_{\theta,\psi}$ and is contractive in total variation with coefficient $\rho<1$. Then
+\begin{equation}
+\|\pi_{\theta,\psi}-\pi\|_{\TV}
+\le\frac{\|\pi K_{\theta,\psi}-\pi\|_{\TV}}{1-\rho}.
+\label{eq:stability}
+\end{equation}
+The numerator is controlled by a sufficiently strong accepted-flow asymmetry measure; it need not be controlled by a finite-capacity neural critic without additional approximation assumptions. This suggests studying a three-way tradeoff between discriminator capacity, balance error, and mixing/contraction.
+
+\paragraph{Why learn acceptance at all?}
+For a \emph{fixed} proposal and exact detailed balance, every valid acceptance probability satisfies
+\begin{equation}
+a(x,y)\le\min\left\{1,\frac{\pi(y)q(x\mid y)}{\pi(x)q(y\mid x)}\right\}=a_{\mathrm{MH}}(x,y)
+\end{equation}
+where the ratio is defined. Thus classical MH is already pointwise maximal in this class. Learning acceptance is principally motivated by \emph{inaccessible density ratios}, not by the prospect of improving upon exact MH at a fixed proposal. Efficiency improvements must primarily arise from learning better proposals, considering computational costs, or moving beyond the ordinary reversible accept/reject class.
+
+\section{Key Research Questions and Initial Experiments}
+\begin{enumerate}[label=\textbf{Q\arabic*.}]
+\item \textbf{Novelty and identifiability.} What objective or guarantee distinguishes jointly trained $(q_\theta,a_\psi)$ from MH-GAN, implicit MH, adversarial Markov-chain learning, and A-NICE-MC? Is the acceptance function identifiable, or only its induced kernel?
+\item \textbf{Correctness.} Under what function-class, support, and ergodicity assumptions does a small adversarial balance loss imply a small stationary-distribution error? Can a meaningful finite-sample bound include both critic estimation error and proposal-learning error?
+\item \textbf{Efficiency.} Can a neural Dirichlet-form objective increase spectral gap or effective sample size per unit computation without sacrificing stationarity? Which observables should the neural mixing critic cover, especially for rare modes and heavy tails?
+\item \textbf{Optimization.} Can training avoid the zero-acceptance solution, poor pairwise-classifier calibration, vanishing gradients, and excessive variance from discrete accept/reject steps? Do we need alternating, bilevel, or staged optimization?
+\item \textbf{Scope.} Should the main theory assume a fixed trained kernel, or extend to online adaptation? Can the framework handle heavy-tailed and multimodal targets, or nonreversible/augmented-state kernels?
+\end{enumerate}
+
+\paragraph{First experimental program.}
+Start with low-dimensional multimodal Gaussian mixtures and Student-$t$ mixtures, where ground-truth diagnostics are available. Compare (i) independent GAN sampling, (ii) MH-GAN, (iii) implicit MH with a fixed Markov proposal, (iv) adversarially learned Markov kernels, and (v) joint proposal--acceptance training, with exact MH as a reference whenever target/proposal densities are available. Report target-distribution mismatch, mass of individual modes, acceptance rate, autocorrelation or function-specific ESS, transition cost, and sensitivity to critic capacity and calibration. Distinguish \emph{stationary} errors from errors induced by finite burn-in or finite-length sampling.
+
+\paragraph{Immediate decision for the next meeting.}
+We suggest first choosing between two clearly different goals: 
+\begin{itemize}[itemsep=0pt,topsep=0pt]
+\item[(A)] jointly optimize a proposal with a classifier-based approximation of the standard MH rule, or 
+\item[(B)] directly learn a more general acceptance function under adversarial stationarity constraints.
+\end{itemize} 
+Goal (A) has a clearer interpretation and stronger prior results; goal (B) is broader but entails a substantially harder correctness problem. Both should be evaluated against the close precedents above before making a novelty claim.
+
+
+%%%%%%%%%%%%-- main content --%%%%%%%%%%
+%\newpage
+
+
+
+
+%%%%%%%%%%%%-- reference --%%%%%%%%%%%
+\bibliographystyle{ims}
+\bibliography{reference}
+
+\newpage
+\appendix
+\end{document}
+
+ 
