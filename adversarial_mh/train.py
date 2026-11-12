@@ -24,7 +24,7 @@ from .model import (
     MHSampler,
 )
 from .targets import GaussianMixture, SamplePool
-from .training import MinimaxTrainer, TrainingConfig
+from .trainer import MinimaxTrainer, TrainingConfig
 
 
 def build_model(
